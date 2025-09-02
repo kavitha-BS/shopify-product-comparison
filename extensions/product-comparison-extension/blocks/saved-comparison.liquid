@@ -1,0 +1,507 @@
+<div id="saved-comparisons-container"
+  {% if customer %}data-customer-id="{{ customer.id }}"{% endif %}>
+  <h2>{{ section.settings.heading_text | default: "Saved Comparisons" }}</h2>
+  <div id="saved-comparisons-list"></div>
+</div>
+
+<!-- Load Comparison Modal -->
+<div id="load-modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);">
+  <div style="background-color: white; margin: 5% auto; padding: 20px; border: none; width: 90%; max-width: 800px; border-radius: 8px; max-height: 80vh; overflow-y: auto;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+      <h3 id="load-modal-title">Comparison Details</h3>
+      <button onclick="closeLoadModal()" style="
+        background: none; 
+        border: none; 
+        font-size: 24px; 
+        cursor: pointer; 
+        color: #666;
+        padding: 0;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      " onmouseover="this.style.color='#333'" onmouseout="this.style.color='#666'">×</button>
+    </div>
+    <div id="load-modal-content"></div>
+    <div style="text-align: right; margin-top: 20px;">
+      <button onclick="closeLoadModal()" style="
+        background-color: #6c757d; 
+        color: white; 
+        border: none; 
+        padding: 10px 20px; 
+        border-radius: 6px; 
+        cursor: pointer;
+        font-weight: 500;
+      " onmouseover="this.style.backgroundColor='#5a6268'" onmouseout="this.style.backgroundColor='#6c757d'">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function generateSessionId() {
+    return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  }
+
+  function getOrCreateSessionId() {
+    let sessionId = sessionStorage.getItem("compareSession");
+    if (!sessionId) {
+      sessionId = generateSessionId();
+      sessionStorage.setItem("compareSession", sessionId);
+    }
+    return sessionId;
+  }
+
+  // Function to get customer ID from Shopify customer object
+  function getCustomerId() {
+    {% comment %} // Check if customer is logged in
+    if (window.Shopify && window.Shopify.customer) {
+      return window.Shopify.customer.id;
+    }
+    // Alternative: Check if customer object exists in global scope
+    if (typeof customer !== 'undefined' && customer && customer.id) {
+      return customer.id;
+    }
+    return null; {% endcomment %}
+    const container = document.getElementById("saved-comparisons-container");
+    if (container && container.dataset.customerId) {
+      return container.dataset.customerId;
+    }
+    return null;
+  }
+
+  // Function to get authentication parameters
+  function getAuthParams() {
+    const customerId = getCustomerId();
+    const sessionId = getOrCreateSessionId();
+    
+    return {
+      customerId: customerId,
+      sessionId: customerId ? null : sessionId // Only use sessionId for guest users
+    };
+  }
+
+  // Initialize shop variable
+  const shop = Shopify.shop;
+
+  // Function to create comparison table for modal
+  function createComparisonTable(products) {
+    if (!products || products.length === 0) {
+      return '<div style="text-align: center; padding: 40px; color: #666;"><h3>No products found</h3></div>';
+    }
+
+    const table = document.createElement("table");
+    table.style.width = "100%";
+    table.style.borderCollapse = "collapse";
+    table.style.marginTop = "10px";
+
+    const makeRow = (label, values) => {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      th.innerText = label;
+      th.style.border = `1px solid {{ section.settings.table_border_color | default: '#ddd' }}`;
+      th.style.padding = "12px";
+      th.style.backgroundColor = `{{ section.settings.heading_bg | default: '#f8f9fa' }}`;
+      th.style.fontWeight = "600";
+      th.style.textAlign = "left";
+      th.style.minWidth = "120px";
+      tr.appendChild(th);
+      
+      values.forEach(value => {
+        const td = document.createElement("td");
+        td.innerHTML = value;
+        td.style.border = `1px solid {{ section.settings.table_border_color | default: '#ddd' }}`;
+        td.style.padding = "12px";
+        td.style.verticalAlign = "top";
+        tr.appendChild(td);
+      });
+      return tr;
+    };
+
+    // Prepare data rows
+    const productTitles = products.map(p => `<strong style="color: #333;">${p.title}</strong>`);
+    const images = products.map(p => {
+      const imageUrl = p.images?.edges?.[0]?.node?.url || p.featuredImage?.url || '';
+      return imageUrl ? `<img src="${imageUrl}" width="60" height="60" alt="${p.title}" style="border-radius: 6px; object-fit: cover;"/>` : '<div style="width: 60px; height: 60px; background: #f0f0f0; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 12px;">No Image</div>';
+    });
+    const prices = products.map(p => {
+      const price = p.variants?.edges?.[0]?.node?.price || p.priceRange?.minVariantPrice?.amount || "0.00";
+      return `<span style="font-size: 16px; font-weight: 600; color: #28a745;">$${price}</span>`;
+    });
+    const inventory = products.map(p => {
+      const qty = p.variants?.edges?.[0]?.node?.inventoryQuantity || 0;
+      const color = qty > 0 ? '#28a745' : '#dc3545';
+      return `<span style="color: ${color}; font-weight: 500;">${qty > 0 ? `${qty} in stock` : 'Out of stock'}</span>`;
+    });
+    const status = products.map(p => {
+      const statusColor = p.status === 'ACTIVE' ? '#28a745' : '#ffc107';
+      return `<span style="color: ${statusColor}; font-weight: 500;">${p.status || 'Unknown'}</span>`;
+    });
+    const vendor = products.map(p => p.vendor || "—");
+    const productType = products.map(p => p.productType || "—");
+    const descriptions = products.map(p => {
+      const desc = p.description || "";
+      return desc.length > 80 ? desc.substring(0, 80) + "..." : desc || "—";
+    });
+
+    const tbody = document.createElement("tbody");
+    tbody.appendChild(makeRow("Product", productTitles));
+    tbody.appendChild(makeRow("Image", images));
+    tbody.appendChild(makeRow("Price", prices));
+    tbody.appendChild(makeRow("Inventory", inventory));
+    tbody.appendChild(makeRow("Status", status));
+    tbody.appendChild(makeRow("Vendor", vendor));
+    tbody.appendChild(makeRow("Type", productType));
+    tbody.appendChild(makeRow("Description", descriptions));
+
+    table.appendChild(tbody);
+    return table.outerHTML;
+  }
+
+  // Load Saved Comparisons
+  async function loadSavedComparisons() {
+    try {
+      const authParams = getAuthParams();
+      const urlParams = new URLSearchParams({
+        shop: shop,
+        ...(authParams.customerId && { customerId: authParams.customerId }),
+        ...(authParams.sessionId && { sessionId: authParams.sessionId })
+      });
+
+      const response = await fetch(`/apps/product-comparison/saved?${urlParams.toString()}`);
+      const result = await response.json();
+
+      const savedList = document.getElementById("saved-comparisons-list");
+      
+      if (!result.comparisons || result.comparisons.length === 0) {
+        const userType = authParams.customerId ? 'your account' : 'this session';
+        savedList.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #666;">
+            <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;">📊</div>
+            <h3 style="margin: 0 0 10px 0; color: #333;">No Saved Comparisons</h3>
+            <p style="margin: 0; font-size: 16px;">No product comparisons found for ${userType}.</p>
+            ${authParams.customerId ? 
+              '<p style="margin: 10px 0 0 0; font-size: 14px; color: #888;">Your comparisons are automatically saved to your account.</p>' :
+              '<p style="margin: 10px 0 0 0; font-size: 14px; color: #888;">Sign in to save comparisons to your account permanently.</p>'
+            }
+            <a href="/pages/product-comparison" style="
+              display: inline-block;
+              margin-top: 20px;
+              background-color: #007bff;
+              color: white;
+              text-decoration: none;
+              padding: 12px 24px;
+              border-radius: 6px;
+              font-weight: 500;
+            " onmouseover="this.style.backgroundColor='#0056b3'" onmouseout="this.style.backgroundColor='#007bff'">
+              Start Comparing Products
+            </a>
+          </div>
+        `;
+        return;
+      }
+
+      savedList.innerHTML = "";
+      
+      result.comparisons.forEach(comparison => {
+        const comparisonDiv = document.createElement("div");
+        comparisonDiv.style.cssText = `
+          border: 1px solid #e9ecef;
+          margin: 0 0 20px 0;
+          padding: 20px;
+          border-radius: 12px;
+          background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+          transition: all 0.3s ease;
+        `;
+        
+        comparisonDiv.onmouseover = function() {
+          this.style.transform = 'translateY(-2px)';
+          this.style.boxShadow = '0 4px 16px rgba(0,0,0,0.12)';
+        };
+        comparisonDiv.onmouseout = function() {
+          this.style.transform = 'translateY(0)';
+          this.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
+        };
+
+        const products = JSON.parse(comparison.products);
+        const productCount = products.length;
+        const createdDate = new Date(comparison.createdAt).toLocaleDateString();
+        const isCustomerComparison = comparison.customerId;
+        
+        // Get first few product names for preview
+        const productPreview = products.slice(0, 3).map(p => p.title).join(", ");
+        const hasMore = products.length > 3;
+
+        comparisonDiv.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+            <div style="flex: 1; min-width: 250px;">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <h4 style="margin: 0; color: #333; font-size: 18px; font-weight: 600;">${comparison.name}</h4>
+                ${isCustomerComparison ? 
+                  '<span style="background: #28a745; color: white; font-size: 11px; padding: 2px 6px; border-radius: 3px; font-weight: 500;">ACCOUNT</span>' :
+                  '<span style="background: #ffc107; color: #333; font-size: 11px; padding: 2px 6px; border-radius: 3px; font-weight: 500;">SESSION</span>'
+                }
+              </div>
+              <p style="margin: 0 0 8px 0; color: #666; font-size: 14px; line-height: 1.4;">
+                <strong>${productCount}</strong> product${productCount > 1 ? 's' : ''} • Created: <strong>${createdDate}</strong>
+              </p>
+              <p style="margin: 0; color: #888; font-size: 13px; line-height: 1.4;">
+                ${productPreview}${hasMore ? ' and more...' : ''}
+              </p>
+            </div>
+            <div style="display: flex; gap: 10px; flex-shrink: 0;">
+              <button onclick="viewSavedComparison('${comparison.id}', '${comparison.name}')" 
+                      style="
+                        background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+                        color: white; 
+                        border: none; 
+                        padding: 10px 20px; 
+                        border-radius: 6px; 
+                        cursor: pointer; 
+                        font-size: 14px;
+                        font-weight: 500;
+                        transition: all 0.2s ease;
+                      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                View Details
+              </button>
+              <button onclick="deleteSavedComparison('${comparison.id}')" 
+                      style="
+                        background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+                        color: white; 
+                        border: none; 
+                        padding: 10px 20px; 
+                        border-radius: 6px; 
+                        cursor: pointer; 
+                        font-size: 14px;
+                        font-weight: 500;
+                        transition: all 0.2s ease;
+                      " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                Delete
+              </button>
+            </div>
+          </div>
+        `;
+
+        savedList.appendChild(comparisonDiv);
+      });
+    } catch (error) {
+      console.error('Error loading saved comparisons:', error);
+      document.getElementById("saved-comparisons-list").innerHTML = `
+        <div style="text-align: center; padding: 40px; color: #dc3545;">
+          <h3>Error Loading Comparisons</h3>
+          <p>Please try refreshing the page.</p>
+        </div>
+      `;
+    }
+  }
+
+  async function viewSavedComparison(comparisonId, comparisonName) {
+    try {
+      const authParams = getAuthParams();
+      const urlParams = new URLSearchParams({
+        shop: shop,
+        ...(authParams.customerId && { customerId: authParams.customerId }),
+        ...(authParams.sessionId && { sessionId: authParams.sessionId })
+      });
+
+      const response = await fetch(`/apps/product-comparison/saved/${comparisonId}?${urlParams.toString()}`);
+      
+      if (!response.ok) {
+        alert('Failed to load comparison details.');
+        return;
+      }
+      
+      const result = await response.json();
+      
+      if (!result.comparison) {
+        alert('Failed to load comparison details.');
+        return;
+      }
+
+      const products = JSON.parse(result.comparison.products);
+      
+      document.getElementById("load-modal-title").textContent = comparisonName;
+      
+      // Create comparison table for modal
+      const tableHTML = createComparisonTable(products);
+      
+      const modalContent = document.getElementById("load-modal-content");
+      modalContent.innerHTML = tableHTML;
+      
+      document.getElementById("load-modal").style.display = "block";
+      
+    } catch (error) {
+      console.error('Error viewing saved comparison:', error);
+      alert('Error loading comparison details.');
+    }
+  }
+
+  function closeLoadModal() {
+    document.getElementById("load-modal").style.display = "none";
+  }
+
+  async function deleteSavedComparison(comparisonId) {
+    if (!confirm('Are you sure you want to delete this saved comparison? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      const authParams = getAuthParams();
+      
+      const response = await fetch(`/apps/product-comparison/saved/${comparisonId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          shop: shop,
+          ...authParams
+        })
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        // Show success message
+        const successDiv = document.createElement('div');
+        successDiv.style.cssText = `
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          background: #28a745;
+          color: white;
+          padding: 15px 20px;
+          border-radius: 6px;
+          z-index: 1001;
+          font-weight: 500;
+        `;
+        successDiv.textContent = 'Comparison deleted successfully!';
+        document.body.appendChild(successDiv);
+        
+        setTimeout(() => {
+          document.body.removeChild(successDiv);
+        }, 3000);
+        
+        loadSavedComparisons(); // Refresh the list
+      } else {
+        alert('Failed to delete comparison: ' + (result.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Error deleting comparison:', error);
+      alert('Error deleting comparison. Please try again.');
+    }
+  }
+
+  // Event listeners
+  document.addEventListener('DOMContentLoaded', function() {
+    // Close modal when clicking outside
+    window.onclick = function(event) {
+      const loadModal = document.getElementById("load-modal");
+      if (event.target === loadModal) {
+        closeLoadModal();
+      }
+    };
+
+    // Initialize
+    loadSavedComparisons();
+  });
+</script>
+
+<style>
+  #saved-comparisons-container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  #saved-comparisons-container h2 {
+    color: #333;
+    margin-bottom: 30px;
+    font-size: 28px;
+    border-bottom: 3px solid #007bff;
+    padding-bottom: 15px;
+    text-align: center;
+  }
+
+  /* Modal styles */
+  #load-modal table {
+    width: 100%;
+    border-collapse: collapse;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  #load-modal th,
+  #load-modal td {
+    border: 1px solid {{ section.settings.table_border_color | default: '#ddd' }};
+    padding: 12px;
+  }
+
+  #load-modal th {
+    background-color: {{ section.settings.heading_bg | default: '#f8f9fa' }};
+    font-weight: 600;
+    color: #333;
+  }
+
+  #load-modal td {
+    background-color: white;
+  }
+
+  #load-modal tr:nth-child(even) td {
+    background-color: #fbfbfb;
+  }
+
+  /* Responsive design */
+  @media (max-width: 768px) {
+    #saved-comparisons-container {
+      padding: 15px;
+    }
+    
+    #saved-comparisons-container h2 {
+      font-size: 24px;
+    }
+    
+    #load-modal > div {
+      width: 95% !important;
+      margin: 10% auto !important;
+    }
+    
+    #load-modal table {
+      font-size: 14px;
+    }
+    
+    #load-modal th,
+    #load-modal td {
+      padding: 8px;
+    }
+  }
+</style>
+
+{% schema %}
+{
+  "name": "Saved Comparisons",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading_text",
+      "label": "Page Heading",
+      "default": "Saved Comparisons"
+    },
+    {
+      "type": "color",
+      "id": "table_border_color",
+      "label": "Table Border Color",
+      "default": "#dddddd"
+    },
+    {
+      "type": "color",
+      "id": "heading_bg",
+      "label": "Table Header Background",
+      "default": "#f8f9fa"
+    }
+  ]
+}
+{% endschema %}

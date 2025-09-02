@@ -1,0 +1,521 @@
+<div id="comparison-container"
+  {% if customer %}data-customer-id="{{ customer.id }}"{% endif %}>
+  <h2>{{ section.settings.heading_text | default: "Product Comparison" }}</h2>
+  
+  
+  <!-- Auto-displayed comparison table -->
+  <div id="comparison-table-wrapper"></div>
+  
+  <!-- Action buttons -->
+  <div style="margin: 20px 0;">
+    <button id="save-comparison-button" style="
+      background-color: #007bff; 
+      color: white; 
+      border: none; 
+      padding: 12px 24px; 
+      border-radius: 6px; 
+      cursor: pointer;
+      font-weight: 500;
+    ">Save Comparison</button>
+  </div>
+</div>
+
+<!-- Save Comparison Modal -->
+<div id="save-modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);">
+  <div style="background-color: white; margin: 15% auto; padding: 20px; border: none; width: 300px; border-radius: 5px;">
+    <h3>Save Comparison</h3>
+    <input type="text" id="comparison-name" placeholder="Enter comparison name" style="width: 100%; padding: 8px; margin: 10px 0; border: 1px solid #ddd; border-radius: 3px;">
+    <div style="text-align: right; margin-top: 15px;">
+      <button onclick="closeSaveModal()" style="background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 3px; margin-right: 10px; cursor: pointer;">Cancel</button>
+      <button onclick="saveComparison()" style="background-color: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer;">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Load Comparison Modal -->
+<div id="load-modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);">
+  <div style="background-color: white; margin: 10% auto; padding: 20px; border: none; width: 500px; border-radius: 5px; max-height: 70vh; overflow-y: auto;">
+    <h3 id="load-modal-title">Comparison Details</h3>
+    <div id="load-modal-content"></div>
+    <div style="text-align: right; margin-top: 15px;">
+      <button onclick="closeLoadModal()" style="background-color: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer;">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Function to get customer ID from data attribute (Liquid)
+  function getCustomerId() {
+    const container = document.getElementById("comparison-container");
+    if (container && container.dataset.customerId) {
+      return container.dataset.customerId;
+    }
+    return null;
+  }
+
+  // Function to get session ID for guest users
+  function getSessionId() {
+    if (!sessionStorage.getItem("compareSession")) {
+      sessionStorage.setItem("compareSession", Math.random().toString(36).substring(2));
+    }
+    return sessionStorage.getItem("compareSession");
+  }
+
+  // Function to get user identification object
+  function getUserIdentification() {
+    const customerId = getCustomerId();
+    const sessionId = getSessionId();
+    
+    return {
+      customerId: customerId,
+      sessionId: customerId ? null : sessionId, // Only use sessionId if not logged in
+      userType: customerId ? 'customer' : 'guest'
+    };
+  }
+
+  // Initialize user info and shop
+  const userInfo = getUserIdentification();
+  const shop = Shopify.shop;
+  console.log('User identification on comparison page:', userInfo);
+
+  let currentComparisonProducts = [];
+
+  // Function to create comparison table
+  function createComparisonTable(products) {
+    if (!products || products.length === 0) {
+      return '<div style="text-align: center; padding: 40px; color: #666;"><h3>No products to compare</h3><p>Add products to your comparison list to see them here.</p></div>';
+    }
+
+    const table = document.createElement("table");
+    table.style.width = "100%";
+    table.style.borderCollapse = "collapse";
+    table.style.marginTop = "20px";
+
+    const makeRow = (label, values) => {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      th.innerText = label;
+      th.style.border = `1px solid {{ section.settings.table_border_color | default: '#ddd' }}`;
+      th.style.padding = "12px";
+      th.style.backgroundColor = `{{ section.settings.heading_bg | default: '#f8f9fa' }}`;
+      th.style.fontWeight = "600";
+      th.style.textAlign = "left";
+      th.style.minWidth = "150px";
+      tr.appendChild(th);
+      
+      values.forEach(value => {
+        const td = document.createElement("td");
+        td.innerHTML = value;
+        td.style.border = `1px solid {{ section.settings.table_border_color | default: '#ddd' }}`;
+        td.style.padding = "12px";
+        td.style.verticalAlign = "top";
+        tr.appendChild(td);
+      });
+      return tr;
+    };
+
+    // Prepare data rows
+    const productTitles = products.map(p => `<strong style="color: #333;">${p.title}</strong>`);
+    const images = products.map(p => {
+      const imageUrl = p.images?.edges?.[0]?.node?.url || p.featuredImage?.url || '';
+      return imageUrl ? `<img src="${imageUrl}" width="80" height="80" alt="${p.title}" style="border-radius: 6px; object-fit: cover;"/>` : '<div style="width: 80px; height: 80px; background: #f0f0f0; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #999;">No Image</div>';
+    });
+    const prices = products.map(p => {
+      const price = p.variants?.edges?.[0]?.node?.price || p.priceRange?.minVariantPrice?.amount || "0.00";
+      return `<span style="font-size: 18px; font-weight: 600; color: #28a745;">$${price}</span>`;
+    });
+    const inventory = products.map(p => {
+      const qty = p.variants?.edges?.[0]?.node?.inventoryQuantity || 0;
+      const color = qty > 0 ? '#28a745' : '#dc3545';
+      return `<span style="color: ${color}; font-weight: 500;">${qty > 0 ? `${qty} in stock` : 'Out of stock'}</span>`;
+    });
+    const status = products.map(p => {
+      const statusColor = p.status === 'ACTIVE' ? '#28a745' : '#ffc107';
+      return `<span style="color: ${statusColor}; font-weight: 500;">${p.status || 'Unknown'}</span>`;
+    });
+    const vendor = products.map(p => p.vendor || "—");
+    const productType = products.map(p => p.productType || "—");
+    const tags = products.map(p => {
+      const tagsList = p.tags || [];
+      return tagsList.length > 0 ? tagsList.slice(0, 3).join(", ") + (tagsList.length > 3 ? "..." : "") : "—";
+    });
+    const createdAt = products.map(p => new Date(p.createdAt).toLocaleDateString());
+    const descriptions = products.map(p => {
+      const desc = p.description || "";
+      return desc.length > 100 ? desc.substring(0, 100) + "..." : desc || "—";
+    });
+
+    // Remove buttons row
+    const removeButtons = products.map(p => 
+      `<button onclick="removeFromCompareList('${p.id}')" style="
+        background-color: #dc3545; 
+        color: white; 
+        border: none; 
+        padding: 6px 12px; 
+        border-radius: 4px; 
+        cursor: pointer; 
+        font-size: 12px;
+        font-weight: 500;
+      " onmouseover="this.style.backgroundColor='#c82333'" onmouseout="this.style.backgroundColor='#dc3545'">
+        Remove
+      </button>`
+    );
+
+    const tbody = document.createElement("tbody");
+    tbody.appendChild(makeRow("Product", productTitles));
+    tbody.appendChild(makeRow("Image", images));
+    tbody.appendChild(makeRow("Price", prices));
+    tbody.appendChild(makeRow("Inventory", inventory));
+    tbody.appendChild(makeRow("Status", status));
+    tbody.appendChild(makeRow("Vendor", vendor));
+    tbody.appendChild(makeRow("Product Type", productType));
+    tbody.appendChild(makeRow("Tags", tags));
+    tbody.appendChild(makeRow("Created", createdAt));
+    tbody.appendChild(makeRow("Description", descriptions));
+    tbody.appendChild(makeRow("Actions", removeButtons));
+
+    table.appendChild(tbody);
+    return table.outerHTML;
+  }
+
+  // Function to load and display comparison automatically
+  async function loadAutoComparison() {
+    try {
+      const userInfo = getUserIdentification();
+      
+      console.log('Loading comparison with user info:', userInfo);
+      
+      // Build query parameters
+      const params = new URLSearchParams({
+        shop: shop
+      });
+      
+      if (userInfo.customerId) {
+        params.append('customerId', userInfo.customerId);
+      } else {
+        params.append('sessionId', userInfo.sessionId);
+      }
+      
+      console.log('Fetching from:', `/apps/product-comparison/list?${params}`);
+      
+      const res = await fetch(`/apps/product-comparison/list?${params}`);
+      const data = await res.json();
+      
+      console.log('API Response:', data);
+
+      currentComparisonProducts = data.products || [];
+      
+      const tableWrapper = document.getElementById("comparison-table-wrapper");
+      
+      // Show user type indicator
+      let userTypeHtml = '';
+      if (data.userType) {
+        userTypeHtml = `<div style="text-align: right; margin-bottom: 10px; font-size: 14px; color: #666;">
+          ${data.userType === 'customer' ? '✓ Saved to your account' : '⚡ Session comparison'}
+        </div>`;
+      }
+      
+      tableWrapper.innerHTML = userTypeHtml + createComparisonTable(currentComparisonProducts);
+      
+      updateButtonVisibility();
+    } catch (error) {
+      console.error('Error loading comparison:', error);
+      document.getElementById("comparison-table-wrapper").innerHTML = 
+        '<div style="text-align: center; padding: 40px; color: #dc3545;"><h3>Error loading comparison</h3><p>Please try refreshing the page.</p></div>';
+    }
+  }
+
+  function updateButtonVisibility() {
+    const saveButton = document.getElementById("save-comparison-button");
+    const canSave = currentComparisonProducts.length >= 2;
+    saveButton.style.display = canSave ? "inline-block" : "none";
+  }
+
+  async function removeFromCompareList(productId) {
+    try {
+      const userInfo = getUserIdentification();
+      
+      const res = await fetch(`/apps/product-comparison/remove`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          shop: shop,
+          productId: productId,
+          ...userInfo
+        })
+      });
+      
+      const result = await res.json();
+      
+      if (res.ok && result.success) {
+        // Reload the comparison automatically
+        await loadAutoComparison();
+        console.log('Product removed successfully');
+      } else {
+        console.error('Failed to remove product:', result.error);
+        alert('Failed to remove product from comparison list');
+      }
+    } catch (error) {
+      console.error('Error removing product:', error);
+      alert('Error removing product from comparison list');
+    }
+  }
+
+  // Save Comparison Functions
+  function showSaveModal() {
+    if (currentComparisonProducts.length < 2) {
+      alert('Please have at least 2 products in comparison before saving.');
+      return;
+    }
+    document.getElementById("save-modal").style.display = "block";
+    document.getElementById("comparison-name").focus();
+  }
+
+  function closeSaveModal() {
+    document.getElementById("save-modal").style.display = "none";
+    document.getElementById("comparison-name").value = "";
+  }
+
+  async function saveComparison() {
+    const name = document.getElementById("comparison-name").value.trim();
+    if (!name) {
+      alert('Please enter a comparison name.');
+      return;
+    }
+
+    if (currentComparisonProducts.length < 2) {
+      alert('Please have at least 2 products in comparison before saving.');
+      return;
+    }
+
+    try {
+      const userInfo = getUserIdentification();
+      
+      const response = await fetch('/apps/product-comparison/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          shop: shop,
+          name: name,
+          products: currentComparisonProducts,
+          ...userInfo
+        })
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        alert('Comparison saved successfully!');
+        closeSaveModal();
+      } else {
+        alert('Failed to save comparison: ' + (result.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Error saving comparison:', error);
+      alert('Error saving comparison. Please try again.');
+    }
+  }
+
+  async function viewSavedComparison(comparisonId, comparisonName) {
+    try {
+      const userInfo = getUserIdentification();
+      
+      // Build query parameters
+      const params = new URLSearchParams({
+        shop: shop
+      });
+      
+      if (userInfo.customerId) {
+        params.append('customerId', userInfo.customerId);
+      } else {
+        params.append('sessionId', userInfo.sessionId);
+      }
+      
+      const response = await fetch(`/apps/product-comparison/saved/${comparisonId}?${params}`);
+      
+      if (!response.ok) {
+        alert('Failed to load comparison details.');
+        return;
+      }
+      
+      const result = await response.json();
+      
+      if (!result.comparison) {
+        alert('Failed to load comparison details.');
+        return;
+      }
+
+      const products = JSON.parse(result.comparison.products);
+      
+      document.getElementById("load-modal-title").textContent = comparisonName;
+      
+      // Create comparison table for modal
+      const tableHTML = createComparisonTable(products);
+      
+      const modalContent = document.getElementById("load-modal-content");
+      modalContent.innerHTML = tableHTML;
+      
+      document.getElementById("load-modal").style.display = "block";
+      
+    } catch (error) {
+      console.error('Error viewing saved comparison:', error);
+      alert('Error loading comparison details.');
+    }
+  }
+
+  function closeLoadModal() {
+    document.getElementById("load-modal").style.display = "none";
+  }
+
+  // Event listeners
+  document.addEventListener('DOMContentLoaded', function() {
+    const saveButton = document.getElementById("save-comparison-button");
+
+    if (saveButton) {
+      saveButton.addEventListener("click", showSaveModal);
+      saveButton.onmouseover = function() { this.style.backgroundColor = "#0056b3"; };
+      saveButton.onmouseout = function() { this.style.backgroundColor = "#007bff"; };
+    }
+
+    // Close modals when clicking outside
+    window.onclick = function(event) {
+      const saveModal = document.getElementById("save-modal");
+      const loadModal = document.getElementById("load-modal");
+      
+      if (event.target === saveModal) {
+        closeSaveModal();
+      }
+      if (event.target === loadModal) {
+        closeLoadModal();
+      }
+    };
+
+    // Allow Enter key to save comparison
+    const comparisonNameInput = document.getElementById("comparison-name");
+    if (comparisonNameInput) {
+      comparisonNameInput.addEventListener("keypress", function(event) {
+        if (event.key === "Enter") {
+          saveComparison();
+        }
+      });
+    }
+
+    // Initialize - Load comparison automatically on page load
+    loadAutoComparison();
+  });
+</script>
+
+<style>
+  #comparison-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  #comparison-container h2 {
+    color: #333;
+    margin-bottom: 20px;
+    font-size: 28px;
+    border-bottom: 3px solid #007bff;
+    padding-bottom: 10px;
+  }
+
+  #comparison-container h3 {
+    color: #333;
+    border-bottom: 2px solid #007bff;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+    font-size: 20px;
+  }
+
+  #comparison-container table {
+    width: 100%;
+    border-collapse: collapse;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  #comparison-container th,
+  #comparison-container td {
+    border: 1px solid {{ section.settings.table_border_color | default: '#ddd' }};
+    padding: 12px;
+  }
+
+  #comparison-container th {
+    background-color: {{ section.settings.heading_bg | default: '#f8f9fa' }};
+    font-weight: 600;
+    color: #333;
+  }
+
+  #comparison-container td {
+    background-color: white;
+  }
+
+  #comparison-container tr:nth-child(even) td {
+    background-color: #fbfbfb;
+  }
+  
+  /* Modal styles */
+  #save-modal input:focus,
+  #load-modal button:focus {
+    outline: 2px solid #007bff;
+  }
+
+  /* Button hover effects */
+  button {
+    transition: all 0.2s ease;
+  }
+
+  button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+
+  /* Responsive design */
+  @media (max-width: 768px) {
+    #comparison-container {
+      padding: 10px;
+    }
+    
+    #comparison-container table {
+      font-size: 14px;
+    }
+    
+    #comparison-container th,
+    #comparison-container td {
+      padding: 8px;
+    }
+  }
+</style>
+
+{% schema %}
+{
+  "name": "Product Comparison",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading_text",
+      "label": "Page Heading",
+      "default": "Product Comparison"
+    },
+    {
+      "type": "color",
+      "id": "table_border_color",
+      "label": "Table Border Color",
+      "default": "#dddddd"
+    },
+    {
+      "type": "color",
+      "id": "heading_bg",
+      "label": "Table Header Background",
+      "default": "#f8f9fa"
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,469 @@
+<div id="compare-button-block" 
+  data-product-id="{{ product.id }}" 
+  data-product-gid="{{ product.admin_graphql_api_id }}" 
+  data-product-title="{{ product.title }}"
+  {% if customer %}data-customer-id="{{ customer.id }}"{% endif %}>
+ <button id="add-to-compare-btn" style="
+  background-color: {{ block.settings.button_color | default: '#3b82f6' }};
+  border: 1px solid {{ block.settings.button_color | default: '#3b82f6' }};
+  color: {{ block.settings.button_text_color | default: 'white' }};
+  padding: 12px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+"
+onmouseover="this.style.opacity='0.9'"
+onmouseout="this.style.opacity='1'">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+  <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12 3C7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2"/>
+</svg>
+   {{ block.settings.button_text }}
+ </button>
+</div>
+
+<!-- Notification Bar -->
+<div id="comparison-notification-bar" style="
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 16px 20px;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+  z-index: 1000;
+  display: none;
+">
+  <div style="
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  ">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <div style="
+        width: 40px;
+        height: 40px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2"/>
+        </svg>
+      </div>
+      <div>
+        <div id="notification-message" style="font-weight: 600; font-size: 16px;"></div>
+        <div id="notification-count" style="font-size: 14px; opacity: 0.9;"></div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 12px; align-items: center;">
+      <button id="view-comparison-btn" style="
+        background: rgba(255,255,255,0.2);
+        border: 1px solid rgba(255,255,255,0.3);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 500;
+        transition: all 0.2s ease;
+      " onmouseover="this.style.background='rgba(255,255,255,0.3)'" 
+         onmouseout="this.style.background='rgba(255,255,255,0.2)'">
+        View Comparison
+      </button>
+      <button id="close-notification-btn" style="
+        background: none;
+        border: none;
+        color: white;
+        font-size: 20px;
+        cursor: pointer;
+        padding: 4px;
+        opacity: 0.7;
+        transition: opacity 0.2s ease;
+      " onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">
+        ×
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Function to get customer ID from data attribute (Liquid)
+function getCustomerId() {
+  const block = document.getElementById("compare-button-block");
+  if (block && block.dataset.customerId) {
+    return block.dataset.customerId;
+  }
+  return null;
+}
+
+// Function to get session ID for guest users
+function getSessionId() {
+  if (!sessionStorage.getItem("compareSession")) {
+    sessionStorage.setItem("compareSession", Math.random().toString(36).substring(2));
+  }
+  return sessionStorage.getItem("compareSession");
+}
+
+// Function to get user identification object
+function getUserIdentification() {
+  const customerId = getCustomerId();
+  const sessionId = getSessionId();
+  
+  return {
+    customerId: customerId,
+    sessionId: customerId ? null : sessionId, // Only use sessionId if not logged in
+    userType: customerId ? 'customer' : 'guest'
+  };
+}
+
+// Function to check if current page is comparison page
+function isComparisonPage() {
+  return window.location.pathname.includes('/pages/product-comparison') || 
+         window.location.pathname.includes('/product-comparison') ||
+         document.querySelector('#comparison-container') !== null;
+}
+
+// Function to show notification bar permanently
+function showPermanentNotificationBar(message, productCount) {
+  if (isComparisonPage()) {
+    return;
+  }
+
+  const notificationBar = document.getElementById("comparison-notification-bar");
+  const messageEl = document.getElementById("notification-message");
+  const countEl = document.getElementById("notification-count");
+  
+  if (!notificationBar || !messageEl || !countEl) return;
+  
+  messageEl.textContent = message;
+  countEl.textContent = `${productCount} product${productCount > 1 ? 's' : ''} in comparison`;
+  
+  notificationBar.style.display = "block";
+}
+
+// Function to show temporary notification (for new additions)
+function showTemporaryNotification(message, productCount, userType = 'guest') {
+  if (isComparisonPage()) {
+    return;
+  }
+
+  const notificationBar = document.getElementById("comparison-notification-bar");
+  const messageEl = document.getElementById("notification-message");
+  const countEl = document.getElementById("notification-count");
+  
+  if (!notificationBar || !messageEl || !countEl) return;
+  
+  messageEl.textContent = message;
+  const userIndicator = userType === 'customer' ? ' (saved to account)' : ' (session)';
+  countEl.textContent = `${productCount} product${productCount > 1 ? 's' : ''} in comparison${userIndicator}`;
+  
+  notificationBar.style.display = "block";
+  
+  // Show temporary highlight effect
+  notificationBar.style.animation = "pulse 0.5s ease-in-out";
+  setTimeout(() => {
+    notificationBar.style.animation = "";
+  }, 500);
+}
+
+// Function to check and show persistent notification bar
+async function checkAndShowPersistentBar() {
+  if (isComparisonPage()) {
+    return;
+  }
+
+  try {
+    const shop = Shopify.shop;
+    const userInfo = getUserIdentification();
+    
+    // Build query parameters
+    const params = new URLSearchParams({
+      shop: shop
+    });
+    
+    if (userInfo.customerId) {
+      params.append('customerId', userInfo.customerId);
+    } else {
+      params.append('sessionId', userInfo.sessionId);
+    }
+    
+    const response = await fetch(`/apps/product-comparison/list?${params}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const productCount = data.products ? data.products.length : 0;
+      
+      if (productCount > 0) {
+        showPermanentNotificationBar("Products ready for comparison", productCount);
+      } else {
+        hideNotificationBar();
+      }
+    }
+  } catch (error) {
+    console.error("Error checking comparison list:", error);
+  }
+}
+
+// Function to hide notification bar
+function hideNotificationBar() {
+  const notificationBar = document.getElementById("comparison-notification-bar");
+  if (notificationBar) {
+    notificationBar.style.display = "none";
+  }
+}
+
+// Function to check if product is in compare list
+async function checkProductInCompare() {
+  const block = document.getElementById("compare-button-block");
+  if (!block) return false;
+  
+  const productGid = block.dataset.productGid;
+  const productId = block.dataset.productId;
+  const shop = Shopify.shop;
+  const userInfo = getUserIdentification();
+  const finalProductId = productGid || productId;
+
+  if (!finalProductId) return false;
+
+  try {
+    const requestBody = {
+      shop: shop,
+      productId: finalProductId,
+      ...userInfo
+    };
+
+    const response = await fetch('/apps/product-comparison/check', {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data.inCompare || false;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error checking product in compare:", error);
+    return false;
+  }
+}
+
+// Function to update button state
+function updateButtonState(isInCompare) {
+  const button = document.getElementById("add-to-compare-btn");
+  if (!button) return;
+  
+  if (isInCompare) {
+    button.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2"/>
+      </svg>
+      Added to Compare
+    `;
+    button.disabled = true;
+    button.style.opacity = "0.7";
+    button.style.cursor = "not-allowed";
+  } else {
+    button.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2"/>
+      </svg>
+      {{ block.settings.button_text }}
+    `;
+    button.disabled = false;
+    button.style.opacity = "1";
+    button.style.cursor = "pointer";
+  }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', async () => {
+  // Log user identification for debugging
+  console.log('User identification:', getUserIdentification());
+  
+  // Check product status if on product page
+  const isInCompare = await checkProductInCompare();
+  updateButtonState(isInCompare);
+  
+  // Always check for existing products and show persistent notification bar
+  await checkAndShowPersistentBar();
+  
+  // Set up periodic check to maintain bar visibility
+  setInterval(checkAndShowPersistentBar, 30000); // Check every 30 seconds
+});
+
+// Add to compare button click handler
+document.addEventListener('click', async (e) => {
+  if (e.target.id === 'add-to-compare-btn' || e.target.closest('#add-to-compare-btn')) {
+    const block = document.getElementById("compare-button-block");
+    if (!block) return;
+    
+    const productGid = block.dataset.productGid;
+    const productId = block.dataset.productId;
+    const productTitle = block.dataset.productTitle;
+    const shop = Shopify.shop;
+    const userInfo = getUserIdentification();
+
+    const finalProductId = productGid || productId;
+
+    if (!finalProductId) {
+      alert("Error: Product ID not found");
+      return;
+    }
+
+    const apiUrl = '/apps/product-comparison/add';
+
+    try {
+      const requestBody = {
+        shop: shop,
+        productId: finalProductId,
+        ...userInfo
+      };
+
+      console.log('Sending request:', requestBody);
+
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      const data = await response.json();
+      console.log('Response:', data);
+      
+      if (data.success) {
+        updateButtonState(true);
+        showTemporaryNotification(
+          `"${productTitle}" added to comparison!`, 
+          data.productCount, 
+          data.userType
+        );
+      } else if (data.isLimitExceeded) {
+        alert("Maximum 4 products allowed in comparison list. Please remove some products to add new ones.");
+      } else if (data.alreadyAdded) {
+        alert("This product is already in your comparison list.");
+      } else {
+        alert("Error: " + (data.error || "Failed to add to compare"));
+      }
+    } catch (error) {
+      console.error("Fetch error:", error);
+      alert("Error: Failed to add to compare");
+    }
+  }
+});
+
+// View comparison button click handler
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'view-comparison-btn') {
+    window.location.href = "/pages/product-comparison";
+  }
+});
+
+// Close notification button click handler
+document.addEventListener('click', async (e) => {
+  if (e.target.id === 'close-notification-btn') {
+    hideNotificationBar();
+    
+    // Set a temporary flag to prevent showing for a short period
+    const userInfo = getUserIdentification();
+    const storageKey = userInfo.customerId ? `hideCompareBar_customer_${userInfo.customerId}` : 'hideCompareBar';
+    sessionStorage.setItem(storageKey, Date.now().toString());
+    
+    // Re-check after 10 seconds to show again if products still exist
+    setTimeout(async () => {
+      const hideTime = sessionStorage.getItem(storageKey);
+      if (hideTime && (Date.now() - parseInt(hideTime)) > 9000) {
+        await checkAndShowPersistentBar();
+      }
+    }, 10000);
+  }
+});
+
+// Handle page visibility change to refresh bar status
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    setTimeout(checkAndShowPersistentBar, 1000);
+  }
+});
+
+// Handle page focus to refresh bar status
+window.addEventListener('focus', () => {
+  setTimeout(checkAndShowPersistentBar, 1000);
+});
+
+// Handle customer login/logout events (if available)
+if (typeof Shopify !== 'undefined' && Shopify.CustomerAccounts) {
+  // Listen for customer account changes
+  document.addEventListener('shopify:customer:login', () => {
+    console.log('Customer logged in, refreshing compare state');
+    setTimeout(checkAndShowPersistentBar, 1000);
+  });
+  
+  document.addEventListener('shopify:customer:logout', () => {
+    console.log('Customer logged out, refreshing compare state');
+    setTimeout(checkAndShowPersistentBar, 1000);
+  });
+}
+</script>
+
+<style>
+/* Add pulse animation for new additions */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+/* Ensure the notification bar stays above other elements */
+#comparison-notification-bar {
+  z-index: 999999 !important;
+}
+
+/* Add some bottom padding to body when bar is visible to prevent content overlap */
+body.has-compare-bar {
+  padding-bottom: 80px;
+}
+</style>
+
+{% schema %}
+{
+"name": "Compare Button",
+"target": "section",
+"settings": [
+ {
+   "type": "text",
+   "id": "button_text",
+   "label": "Button Text",
+   "default": "Add to Compare"
+ },
+ {
+   "type": "color",
+   "id": "button_color",
+   "label": "Button Color",
+   "default": "#000000"
+ },
+ {
+   "type": "color",
+   "id": "button_text_color",
+   "label": "Text Color",
+   "default": "#ffffff"
+ }
+]
+}
+{% endschema %}
