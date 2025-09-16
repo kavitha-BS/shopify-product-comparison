@@ -59,3 +59,11 @@ model CompareList {
   @@index([shop, customerId])
   @@index([shop, sessionId])
 }
+
+model ComparisonConfig {
+  id         String   @id @default(cuid())
+  shop       String   @unique
+  attributes String   // JSON string of attribute configuration
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

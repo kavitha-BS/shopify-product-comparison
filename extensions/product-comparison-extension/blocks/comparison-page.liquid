@@ -2,7 +2,6 @@
   {% if customer %}data-customer-id="{{ customer.id }}"{% endif %}>
   <h2>{{ section.settings.heading_text | default: "Product Comparison" }}</h2>
   
-  
   <!-- Auto-displayed comparison table -->
   <div id="comparison-table-wrapper"></div>
   
@@ -44,6 +43,9 @@
 </div>
 
 <script>
+  // Global configuration for comparison attributes
+  let comparisonConfig = null;
+
   // Function to get customer ID from data attribute (Liquid)
   function getCustomerId() {
     const container = document.getElementById("comparison-container");
@@ -68,7 +70,7 @@
     
     return {
       customerId: customerId,
-      sessionId: customerId ? null : sessionId, // Only use sessionId if not logged in
+      sessionId: customerId ? null : sessionId,
       userType: customerId ? 'customer' : 'guest'
     };
   }
@@ -80,10 +82,94 @@
 
   let currentComparisonProducts = [];
 
-  // Function to create comparison table
+  // Function to load comparison configuration
+  async function loadComparisonConfig() {
+    try {
+      const res = await fetch(`/apps/product-comparison/comparison-config?shop=${encodeURIComponent(shop)}`);
+      const data = await res.json();
+      
+      if (data.success) {
+        comparisonConfig = data.attributes;
+        console.log('Loaded comparison config:', comparisonConfig);
+      } else {
+        console.error('Failed to load comparison config:', data.error);
+        // Use default configuration
+        comparisonConfig = getDefaultAttributes();
+      }
+    } catch (error) {
+      console.error('Error loading comparison config:', error);
+      // Use default configuration
+      comparisonConfig = getDefaultAttributes();
+    }
+  }
+
+  // Default attributes configuration
+  function getDefaultAttributes() {
+    return [
+      { key: 'title', label: 'Product Name', enabled: true, order: 1 },
+      { key: 'image', label: 'Image', enabled: true, order: 2 },
+      { key: 'price', label: 'Price', enabled: true, order: 3 },
+      { key: 'inventory', label: 'Inventory', enabled: true, order: 4 }
+    ];
+  }
+
+  // Function to get product attribute value based on configuration
+  function getProductAttributeValue(product, attributeKey) {
+    switch (attributeKey) {
+      case 'title':
+        return `<strong style="color: #333;">${product.title}</strong>`;
+      
+      case 'image':
+        const imageUrl = product.images?.edges?.[0]?.node?.url || product.featuredImage?.url || '';
+        return imageUrl ? 
+          `<img src="${imageUrl}" width="80" height="80" alt="${product.title}" style="border-radius: 6px; object-fit: cover;"/>` : 
+          '<div style="width: 80px; height: 80px; background: #f0f0f0; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #999;">No Image</div>';
+      
+      case 'price':
+        const price = product.variants?.edges?.[0]?.node?.price || product.priceRange?.minVariantPrice?.amount || "0.00";
+        return `<span style="font-size: 18px; font-weight: 600; color: #28a745;">$${price}</span>`;
+      
+      case 'inventory':
+        const qty = product.variants?.edges?.[0]?.node?.inventoryQuantity || 0;
+        const color = qty > 0 ? '#28a745' : '#dc3545';
+        return `<span style="color: ${color}; font-weight: 500;">${qty > 0 ? `${qty} in stock` : 'Out of stock'}</span>`;
+      
+      case 'status':
+        const statusColor = product.status === 'ACTIVE' ? '#28a745' : '#ffc107';
+        return `<span style="color: ${statusColor}; font-weight: 500;">${product.status || 'Unknown'}</span>`;
+      
+      case 'vendor':
+        return product.vendor || "—";
+      
+      case 'productType':
+        return product.productType || "—";
+      
+      case 'tags':
+        const tagsList = product.tags || [];
+        return tagsList.length > 0 ? 
+          tagsList.slice(0, 3).join(", ") + (tagsList.length > 3 ? "..." : "") : 
+          "—";
+      
+      case 'createdAt':
+        return new Date(product.createdAt).toLocaleDateString();
+      
+      case 'description':
+        const desc = product.description || "";
+        return desc.length > 100 ? desc.substring(0, 100) + "..." : desc || "—";
+      
+      default:
+        return "—";
+    }
+  }
+
+  // Function to create comparison table based on configuration
   function createComparisonTable(products) {
     if (!products || products.length === 0) {
       return '<div style="text-align: center; padding: 40px; color: #666;"><h3>No products to compare</h3><p>Add products to your comparison list to see them here.</p></div>';
+    }
+
+    if (!comparisonConfig) {
+      return '<div style="text-align: center; padding: 40px; color: #666;"><h3>Loading configuration...</h3></div>';
     }
 
     const table = document.createElement("table");
@@ -114,38 +200,17 @@
       return tr;
     };
 
-    // Prepare data rows
-    const productTitles = products.map(p => `<strong style="color: #333;">${p.title}</strong>`);
-    const images = products.map(p => {
-      const imageUrl = p.images?.edges?.[0]?.node?.url || p.featuredImage?.url || '';
-      return imageUrl ? `<img src="${imageUrl}" width="80" height="80" alt="${p.title}" style="border-radius: 6px; object-fit: cover;"/>` : '<div style="width: 80px; height: 80px; background: #f0f0f0; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #999;">No Image</div>';
-    });
-    const prices = products.map(p => {
-      const price = p.variants?.edges?.[0]?.node?.price || p.priceRange?.minVariantPrice?.amount || "0.00";
-      return `<span style="font-size: 18px; font-weight: 600; color: #28a745;">$${price}</span>`;
-    });
-    const inventory = products.map(p => {
-      const qty = p.variants?.edges?.[0]?.node?.inventoryQuantity || 0;
-      const color = qty > 0 ? '#28a745' : '#dc3545';
-      return `<span style="color: ${color}; font-weight: 500;">${qty > 0 ? `${qty} in stock` : 'Out of stock'}</span>`;
-    });
-    const status = products.map(p => {
-      const statusColor = p.status === 'ACTIVE' ? '#28a745' : '#ffc107';
-      return `<span style="color: ${statusColor}; font-weight: 500;">${p.status || 'Unknown'}</span>`;
-    });
-    const vendor = products.map(p => p.vendor || "—");
-    const productType = products.map(p => p.productType || "—");
-    const tags = products.map(p => {
-      const tagsList = p.tags || [];
-      return tagsList.length > 0 ? tagsList.slice(0, 3).join(", ") + (tagsList.length > 3 ? "..." : "") : "—";
-    });
-    const createdAt = products.map(p => new Date(p.createdAt).toLocaleDateString());
-    const descriptions = products.map(p => {
-      const desc = p.description || "";
-      return desc.length > 100 ? desc.substring(0, 100) + "..." : desc || "—";
+    const tbody = document.createElement("tbody");
+
+    // Add rows based on configuration
+    comparisonConfig.forEach(attribute => {
+      if (attribute.enabled) {
+        const values = products.map(product => getProductAttributeValue(product, attribute.key));
+        tbody.appendChild(makeRow(attribute.label, values));
+      }
     });
 
-    // Remove buttons row
+    // Always add remove buttons row at the end
     const removeButtons = products.map(p => 
       `<button onclick="removeFromCompareList('${p.id}')" style="
         background-color: #dc3545; 
@@ -160,18 +225,6 @@
         Remove
       </button>`
     );
-
-    const tbody = document.createElement("tbody");
-    tbody.appendChild(makeRow("Product", productTitles));
-    tbody.appendChild(makeRow("Image", images));
-    tbody.appendChild(makeRow("Price", prices));
-    tbody.appendChild(makeRow("Inventory", inventory));
-    tbody.appendChild(makeRow("Status", status));
-    tbody.appendChild(makeRow("Vendor", vendor));
-    tbody.appendChild(makeRow("Product Type", productType));
-    tbody.appendChild(makeRow("Tags", tags));
-    tbody.appendChild(makeRow("Created", createdAt));
-    tbody.appendChild(makeRow("Description", descriptions));
     tbody.appendChild(makeRow("Actions", removeButtons));
 
     table.appendChild(tbody);
@@ -181,6 +234,11 @@
   // Function to load and display comparison automatically
   async function loadAutoComparison() {
     try {
+      // Load configuration first if not already loaded
+      if (!comparisonConfig) {
+        await loadComparisonConfig();
+      }
+
       const userInfo = getUserIdentification();
       
       console.log('Loading comparison with user info:', userInfo);

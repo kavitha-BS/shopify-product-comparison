@@ -23,6 +23,7 @@ export default function App() {
           Home
         </Link>
         <Link to="/saved-comparisons">Saved comparisons page</Link>
+        <Link to="/app/comparisons">Product Attribute configuration</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>
